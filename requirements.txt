@@ -1,0 +1,5 @@
+# Dependências Python do bot
+mss
+numpy
+opencv-python
+psutil
