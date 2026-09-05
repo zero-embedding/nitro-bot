@@ -1,10 +1,10 @@
+import os
 import random
 import subprocess
 import time
 
 import cv2
 import numpy as np
-import psutil
 from mss import mss
 
 print("Iniciando bot de largada para Nitto Legends...")
@@ -17,21 +17,49 @@ print("""   █████ █████ ████   ███       █�
 print("0"*80)
 print("Bot de largada para Nitto Legends")
 
+# Tela cheia no monitor 2560x1440. Região = mesma proporção da calibração
+# original (320, 100, 90x180 numa janela ~799x626), lado esquerdo do semáforo.
+LARGURA_TELA = 2560
+ALTURA_TELA = 1440
+_CALIB_LARGURA = 799
+_CALIB_ALTURA = 626
+
 REGIAO_SEMAFORO = {
-    "left": 320,
-    "top": 100,
-    "width": 90,
-    "height": 180,
+    "left": round(320 * LARGURA_TELA / _CALIB_LARGURA),
+    "top": round(100 * ALTURA_TELA / _CALIB_ALTURA),
+    "width": round(90 * LARGURA_TELA / _CALIB_LARGURA),
+    "height": round(180 * ALTURA_TELA / _CALIB_ALTURA),
 }
 
-LIMITE_PIXELS_VERDES = 120
+_AREA_CALIB = 90 * 180
+_AREA_ATUAL = REGIAO_SEMAFORO["width"] * REGIAO_SEMAFORO["height"]
+LIMITE_PIXELS_VERDES = max(120, round(120 * _AREA_ATUAL / _AREA_CALIB))
 
 
-def jogo_aberto() -> bool:
-    return any(
-        "nittolegendscli" in (processo.info["name"] or "").lower()
-        for processo in psutil.process_iter(["name"])
-    )
+def ydotool_env() -> dict[str, str]:
+    env = os.environ.copy()
+    if env.get("YDOTOOL_SOCKET"):
+        return env
+
+    runtime = env.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    for caminho in (f"{runtime}/.ydotool_socket", "/tmp/.ydotool_socket"):
+        if os.path.exists(caminho):
+            env["YDOTOOL_SOCKET"] = caminho
+            break
+    else:
+        env["YDOTOOL_SOCKET"] = f"{runtime}/.ydotool_socket"
+    return env
+
+
+def garantir_ydotool() -> dict[str, str]:
+    env = ydotool_env()
+    socket = env.get("YDOTOOL_SOCKET", "")
+    if not socket or not os.path.exists(socket):
+        raise RuntimeError(
+            "ydotoold não está no ar. Rode ./setup-bazzite.sh e, se o grupo "
+            "input acabou de ser adicionado, saia e entre de novo no KDE."
+        )
+    return env
 
 
 def captura_semaforo(sct: mss) -> np.ndarray:
@@ -53,26 +81,25 @@ def largada_detectada(frame: np.ndarray) -> tuple[bool, int]:
 
 
 def tempo_reacao() -> tuple[float, bool]:
-    # 90%: largada ótima.
-    atraso_s = random.uniform(0.005, 0.030)
-    largada_ruim = False
+    sorteio = random.random()
 
-    # 10%: reação mais lenta.
-    if random.random() < 0.10:
-        atraso_s = random.uniform(0.080, 0.300)
-        largada_ruim = True
+    if sorteio < 0.08:
+        return random.uniform(0.130, 0.280), True
 
-    return atraso_s, largada_ruim
+    if sorteio < 0.28:
+        return random.uniform(0.070, 0.115), False
 
-
-def pressionar_w() -> None:
-    subprocess.run(
-        ["ydotool", "key", "17:1", "17:0"],
-        check=True,
-    )
+    return random.uniform(0.038, 0.072), False
 
 
-def executar_largada(pixels_verdes: int) -> None:
+def pressionar_w(env: dict[str, str]) -> None:
+    hold_s = random.uniform(0.045, 0.085)
+    subprocess.run(["ydotool", "key", "17:1"], check=True, env=env)
+    time.sleep(hold_s)
+    subprocess.run(["ydotool", "key", "17:0"], check=True, env=env)
+
+
+def executar_largada(pixels_verdes: int, env: dict[str, str]) -> None:
     atraso_s, largada_ruim = tempo_reacao()
 
     print(
@@ -82,23 +109,32 @@ def executar_largada(pixels_verdes: int) -> None:
     )
 
     time.sleep(atraso_s)
-    pressionar_w()
+    pressionar_w(env)
 
 
 def main() -> None:
-    print("Bot iniciado. Aguardando Nitto Legends...")
+    env = garantir_ydotool()
+    print(
+        f"Região do semáforo em {LARGURA_TELA}x{ALTURA_TELA}: "
+        f"{REGIAO_SEMAFORO} | limiar verde: {LIMITE_PIXELS_VERDES}"
+    )
+    print(f"ydotool socket: {env['YDOTOOL_SOCKET']}")
+    print("Bot iniciado. Ctrl+C para encerrar.")
     print("Aguardando uma corrida nova para armar a detecção...")
-
-    if not jogo_aberto():
-        print("Nitto Legends não está aberto. Encerrando.")
-        return
 
     with mss() as sct:
         verde_anterior = False
         bot_armado = False
+        debug_salvo = False
 
-        while jogo_aberto():
+        while True:
             frame = captura_semaforo(sct)
+
+            if not debug_salvo:
+                cv2.imwrite("/tmp/semaforo_debug.png", frame)
+                print("Recorte do semáforo salvo em /tmp/semaforo_debug.png — confira se o farol está na imagem.")
+                debug_salvo = True
+
             verde_atual, pixels_verdes = largada_detectada(frame)
 
             if not verde_atual:
@@ -108,7 +144,7 @@ def main() -> None:
 
             if bot_armado and verde_atual and not verde_anterior:
                 try:
-                    executar_largada(pixels_verdes)
+                    executar_largada(pixels_verdes, env)
                 except subprocess.CalledProcessError as erro:
                     print(f"Erro ao enviar W pelo ydotool: {erro}")
                     break
@@ -118,8 +154,11 @@ def main() -> None:
             verde_anterior = verde_atual
             time.sleep(0.01)
 
-    print("Jogo fechado ou bot encerrado.")
-
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nEncerrado.")
+    except RuntimeError as erro:
+        print(erro)

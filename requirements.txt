@@ -1,5 +1,5 @@
-# Dependências Python do bot
+# Dependências Python do bot (pip).
+# ydotool é pacote do sistema — instale com ./setup-bazzite.sh
 mss
 numpy
 opencv-python
-psutil
