@@ -1,11 +1,15 @@
 import os
 import random
 import subprocess
+import sys
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
 from mss import mss
+
+from regioes import LIMITE_PIXELS_VERDES, REGIAO_SEMAFORO
 
 print("Iniciando bot de largada para Nitto Legends...")
 print("0"*80)
@@ -16,24 +20,6 @@ print("""   █████ █████ ████   ███       █�
             █████ █████ █   █  ███       █████ █   █ ████  █████ ████  ████  ███ █   █  ███""")
 print("0"*80)
 print("Bot de largada para Nitto Legends")
-
-# Tela cheia no monitor 2560x1440. Região = mesma proporção da calibração
-# original (320, 100, 90x180 numa janela ~799x626), lado esquerdo do semáforo.
-LARGURA_TELA = 2560
-ALTURA_TELA = 1440
-_CALIB_LARGURA = 799
-_CALIB_ALTURA = 626
-
-REGIAO_SEMAFORO = {
-    "left": round(320 * LARGURA_TELA / _CALIB_LARGURA),
-    "top": round(100 * ALTURA_TELA / _CALIB_ALTURA),
-    "width": round(90 * LARGURA_TELA / _CALIB_LARGURA),
-    "height": round(180 * ALTURA_TELA / _CALIB_ALTURA),
-}
-
-_AREA_CALIB = 90 * 180
-_AREA_ATUAL = REGIAO_SEMAFORO["width"] * REGIAO_SEMAFORO["height"]
-LIMITE_PIXELS_VERDES = max(120, round(120 * _AREA_ATUAL / _AREA_CALIB))
 
 
 def ydotool_env() -> dict[str, str]:
@@ -60,6 +46,15 @@ def garantir_ydotool() -> dict[str, str]:
             "input acabou de ser adicionado, saia e entre de novo no KDE."
         )
     return env
+
+
+def iniciar_gabarito() -> subprocess.Popen:
+    script = Path(__file__).resolve().parent / "gabarito.py"
+    return subprocess.Popen(
+        [sys.executable, str(script)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def captura_semaforo(sct: mss) -> np.ndarray:
@@ -114,45 +109,58 @@ def executar_largada(pixels_verdes: int, env: dict[str, str]) -> None:
 
 def main() -> None:
     env = garantir_ydotool()
+    gabarito = iniciar_gabarito()
     print(
-        f"Região do semáforo em {LARGURA_TELA}x{ALTURA_TELA}: "
-        f"{REGIAO_SEMAFORO} | limiar verde: {LIMITE_PIXELS_VERDES}"
+        f"Região do semáforo: {REGIAO_SEMAFORO} | "
+        f"limiar verde: {LIMITE_PIXELS_VERDES}"
     )
     print(f"ydotool socket: {env['YDOTOOL_SOCKET']}")
+    print("Gabarito vermelho aberto. Encaixe a janela do jogo e deixe-o visível.")
     print("Bot iniciado. Ctrl+C para encerrar.")
     print("Aguardando uma corrida nova para armar a detecção...")
 
-    with mss() as sct:
-        verde_anterior = False
-        bot_armado = False
-        debug_salvo = False
+    try:
+        with mss() as sct:
+            verde_anterior = False
+            bot_armado = False
+            debug_salvo = False
 
-        while True:
-            frame = captura_semaforo(sct)
+            while True:
+                frame = captura_semaforo(sct)
 
-            if not debug_salvo:
-                cv2.imwrite("/tmp/semaforo_debug.png", frame)
-                print("Recorte do semáforo salvo em /tmp/semaforo_debug.png — confira se o farol está na imagem.")
-                debug_salvo = True
+                if not debug_salvo:
+                    cv2.imwrite("/tmp/semaforo_debug.png", frame)
+                    print(
+                        "Recorte do semáforo salvo em /tmp/semaforo_debug.png "
+                        "— confira se o farol está na imagem."
+                    )
+                    debug_salvo = True
 
-            verde_atual, pixels_verdes = largada_detectada(frame)
+                verde_atual, pixels_verdes = largada_detectada(frame)
 
-            if not verde_atual:
-                if not bot_armado:
-                    print("Bot armado. Aguardando o verde...")
-                bot_armado = True
+                if not verde_atual:
+                    if not bot_armado:
+                        print("Bot armado. Aguardando o verde...")
+                    bot_armado = True
 
-            if bot_armado and verde_atual and not verde_anterior:
-                try:
-                    executar_largada(pixels_verdes, env)
-                except subprocess.CalledProcessError as erro:
-                    print(f"Erro ao enviar W pelo ydotool: {erro}")
-                    break
+                if bot_armado and verde_atual and not verde_anterior:
+                    try:
+                        executar_largada(pixels_verdes, env)
+                    except subprocess.CalledProcessError as erro:
+                        print(f"Erro ao enviar W pelo ydotool: {erro}")
+                        break
 
-                bot_armado = False
+                    bot_armado = False
 
-            verde_anterior = verde_atual
-            time.sleep(0.01)
+                verde_anterior = verde_atual
+                time.sleep(0.01)
+    finally:
+        if gabarito.poll() is None:
+            gabarito.terminate()
+            try:
+                gabarito.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                gabarito.kill()
 
 
 if __name__ == "__main__":

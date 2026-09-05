@@ -5,8 +5,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export YDOTOOL_SOCKET="${YDOTOOL_SOCKET:-$RUNTIME_DIR/.ydotool_socket}"
 
-if [[ ! -x "$ROOT/.venv/bin/python" ]]; then
-  echo "Ambiente Python ainda não foi criado. Rode: $ROOT/setup-bazzite.sh"
+if [[ -x "$ROOT/.venv/bin/python" ]] && "$ROOT/.venv/bin/python" -c "import cv2, mss, PySide6" 2>/dev/null; then
+  PYTHON="$ROOT/.venv/bin/python"
+else
+  PYTHON="python3"
+fi
+if ! "$PYTHON" -c "import cv2, mss, PySide6" 2>/dev/null; then
+  echo "Dependências Python ausentes. Rode: $ROOT/setup-bazzite.sh"
   exit 1
 fi
 
@@ -28,4 +33,4 @@ if [[ ! -S "$YDOTOOL_SOCKET" ]]; then
   exit 1
 fi
 
-exec "$ROOT/.venv/bin/python" "$ROOT/main.py" "$@"
+exec "$PYTHON" "$ROOT/main.py" "$@"
